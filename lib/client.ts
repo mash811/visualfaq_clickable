@@ -58,3 +58,28 @@ export async function listAllFaqs(): Promise<FaqSuggestion[]> {
   const data = (await res.json()) as { entries: FaqSuggestion[] };
   return data.entries;
 }
+
+export type RagPreview = {
+  faqId: string;
+  question: string;
+  answer: string;
+  candidates: { id: string; question: string }[];
+  method: string;
+  reason?: string;
+};
+
+export async function callRag(args: {
+  query: string;
+  contextFaqId?: string;
+}): Promise<RagPreview> {
+  const res = await fetch("/api/rag", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? `rag failed (${res.status})`);
+  }
+  return (await res.json()) as RagPreview;
+}

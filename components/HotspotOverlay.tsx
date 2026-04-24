@@ -23,13 +23,12 @@ export function HotspotOverlay({
       {hotspots.map((h, idx) => {
         const isVisible = alwaysShowLabels || hoverIdx === idx;
         const visited = !!h.childNodeId;
-        const hasFaq = !!h.relatedFaqId;
-        const isClickable = hasFaq && !disabled;
+        const hinted = !!h.relatedFaqId; // pre-resolved hint from Fuse
         return (
           <button
             key={`${h.label}-${idx}`}
             type="button"
-            disabled={!isClickable}
+            disabled={disabled}
             onClick={() => onHotspotClick(idx, h)}
             onMouseEnter={() => setHoverIdx(idx)}
             onMouseLeave={() => setHoverIdx((cur) => (cur === idx ? null : cur))}
@@ -39,17 +38,11 @@ export function HotspotOverlay({
             className={
               "pointer-events-auto absolute rounded-md transition " +
               (isVisible
-                ? hasFaq
-                  ? "border-2 border-neutral-900 bg-white/10 shadow-lg backdrop-blur-[1px]"
-                  : "border-2 border-neutral-400 bg-white/5"
-                : hasFaq
-                  ? "border-2 border-dashed border-neutral-900/30 bg-transparent hover:border-neutral-900 hover:bg-white/10"
-                  : "border-2 border-dashed border-neutral-400/40 bg-transparent") +
-              (isClickable
-                ? " cursor-pointer"
-                : hasFaq
-                  ? " cursor-progress opacity-60"
-                  : " cursor-not-allowed opacity-50") +
+                ? "border-2 border-neutral-900 bg-white/10 shadow-lg backdrop-blur-[1px]"
+                : hinted
+                  ? "border-2 border-dashed border-emerald-600/50 bg-transparent hover:border-neutral-900 hover:bg-white/10"
+                  : "border-2 border-dashed border-neutral-900/30 bg-transparent hover:border-neutral-900 hover:bg-white/10") +
+              (disabled ? " cursor-progress opacity-60" : " cursor-pointer") +
               (visited ? " ring-2 ring-emerald-400/60" : "")
             }
             style={{
@@ -61,14 +54,15 @@ export function HotspotOverlay({
           >
             <span
               className={
-                "absolute -top-7 left-0 flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-white shadow-md transition " +
-                (hasFaq ? "bg-neutral-900" : "bg-neutral-500") +
-                (isVisible ? " opacity-100" : " opacity-0")
+                "absolute -top-7 left-0 flex items-center gap-1 whitespace-nowrap rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white shadow-md transition " +
+                (isVisible ? "opacity-100" : "opacity-0")
               }
             >
               <span>{h.label}</span>
               {visited && <span className="text-emerald-300">✓</span>}
-              {!hasFaq && <span className="text-[10px] opacity-80">(FAQなし)</span>}
+              {hinted && !visited && (
+                <span className="text-emerald-300 text-[10px]">FAQ候補あり</span>
+              )}
             </span>
           </button>
         );
