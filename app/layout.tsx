@@ -3,9 +3,9 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "Flipbook — visual knowledge explorer",
+  title: "Visual FAQ Explorer",
   description:
-    "Type a topic, get an illustrated explanation, and click into any element to dive deeper.",
+    "Search an FAQ list and get an illustrated answer with clickable hotspots that drill into related FAQ entries.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

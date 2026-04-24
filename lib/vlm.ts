@@ -5,7 +5,8 @@ import type { Hotspot } from "./types";
 const MODEL_ID = "claude-sonnet-4-6";
 
 export async function extractHotspots(args: {
-  topic: string;
+  question: string;
+  answer: string;
   imageBase64: string;
   imageMimeType: string;
 }): Promise<Hotspot[]> {
@@ -33,7 +34,10 @@ export async function extractHotspots(args: {
           },
           {
             type: "text",
-            text: buildHotspotExtractionPrompt(args.topic),
+            text: buildHotspotExtractionPrompt({
+              question: args.question,
+              answer: args.answer,
+            }),
           },
         ],
       },

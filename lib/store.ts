@@ -1,27 +1,30 @@
 "use client";
 
 import { create } from "zustand";
-import type { FlipNode, GenerateResponse, Hotspot } from "./types";
+import type { FlipNode, GenerateResponse, Hotspot, RelatedFaq } from "./types";
 
 type AddNodeArgs = {
-  topic: string;
   parentId: string | null;
-  parentLabel?: string;
   response: GenerateResponse;
 };
 
 type FlipbookState = {
   nodes: Record<string, FlipNode>;
   currentId: string | null;
-  // root → current id list, used for breadcrumbs.
   path: string[];
   styleSeed: string | null;
   loading: boolean;
   error: string | null;
 
+  // Only the current node's related FAQs are kept here — they're derived from
+  // the last generate response and shown in the side panel.
+  currentRelated: RelatedFaq[];
+
   setLoading: (v: boolean) => void;
   setError: (msg: string | null) => void;
   setStyleSeed: (s: string | null) => void;
+  setCurrentRelated: (r: RelatedFaq[]) => void;
+
   addNode: (args: AddNodeArgs) => string;
   attachChildToHotspot: (
     parentId: string,
@@ -43,17 +46,21 @@ export const useFlipbookStore = create<FlipbookState>((set, get) => ({
   styleSeed: null,
   loading: false,
   error: null,
+  currentRelated: [],
 
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   setStyleSeed: (styleSeed) => set({ styleSeed }),
+  setCurrentRelated: (currentRelated) => set({ currentRelated }),
 
-  addNode: ({ topic, parentId, parentLabel, response }) => {
+  addNode: ({ parentId, response }) => {
     const node: FlipNode = {
       id: response.nodeId,
-      label: topic,
-      parentLabel,
+      faqId: response.faqId,
+      question: response.question,
+      answer: response.answer,
       imageUrl: response.imageUrl,
+      imageId: response.imageId,
       hotspots: response.hotspots,
       parentId,
       createdAt: Date.now(),
@@ -63,7 +70,12 @@ export const useFlipbookStore = create<FlipbookState>((set, get) => ({
       const newPath = parentId
         ? [...buildPath(nodes, parentId), node.id]
         : [node.id];
-      return { nodes, currentId: node.id, path: newPath };
+      return {
+        nodes,
+        currentId: node.id,
+        path: newPath,
+        currentRelated: response.related,
+      };
     });
     return node.id;
   },
@@ -92,7 +104,23 @@ export const useFlipbookStore = create<FlipbookState>((set, get) => ({
   navigateTo: (nodeId) =>
     set((state) => {
       if (!state.nodes[nodeId]) return state;
-      return { currentId: nodeId, path: buildPath(state.nodes, nodeId) };
+      // When navigating back to an existing node we don't have the stored
+      // related list; recompute from hotspots that resolved to FAQs.
+      const node = state.nodes[nodeId];
+      const seen = new Set<string>();
+      const currentRelated: RelatedFaq[] = [];
+      for (const h of node.hotspots) {
+        if (!h.relatedFaqId || seen.has(h.relatedFaqId)) continue;
+        seen.add(h.relatedFaqId);
+        // label may drift from the official FAQ question; we only have the id
+        // here, so the side panel will fetch the full question via props.
+        currentRelated.push({ id: h.relatedFaqId, question: h.label });
+      }
+      return {
+        currentId: nodeId,
+        path: buildPath(state.nodes, nodeId),
+        currentRelated,
+      };
     }),
 
   reset: () =>
@@ -103,6 +131,7 @@ export const useFlipbookStore = create<FlipbookState>((set, get) => ({
       styleSeed: null,
       loading: false,
       error: null,
+      currentRelated: [],
     }),
 
   current: () => {
