@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useFlipbookStore } from "@/lib/store";
 import { callGenerate, callReanalyze } from "@/lib/client";
-import type { Hotspot, RelatedFaq } from "@/lib/types";
+import type { GenerateRequest, Hotspot, RelatedFaq } from "@/lib/types";
 import { Breadcrumb } from "./Breadcrumb";
 import { HotspotOverlay } from "./HotspotOverlay";
 import { Toast } from "./Toast";
@@ -37,11 +37,13 @@ export function Flipbook() {
 
   const [alwaysShowLabels, setAlwaysShowLabels] = useState(false);
   const [reanalyzing, setReanalyzing] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<
+    "idle" | "searching" | "generating"
+  >("idle");
 
   const current = currentId ? nodes[currentId] ?? null : null;
   const pathNodes = path.map((id) => nodes[id]).filter(Boolean);
 
-  // Generate root node from either ?faqId or ?q.
   useEffect(() => {
     if (!initialFaqId && !initialQuery) {
       router.replace("/");
@@ -52,6 +54,7 @@ export function Flipbook() {
     (async () => {
       try {
         setLoading(true);
+        setLoadingStage(initialQuery ? "searching" : "generating");
         setError(null);
         const seed =
           styleSeed ?? `seed-${Math.random().toString(36).slice(2, 10)}`;
@@ -69,7 +72,10 @@ export function Flipbook() {
           setError(err instanceof Error ? err.message : "生成に失敗しました");
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setLoadingStage("idle");
+        }
       }
     })();
     return () => {
@@ -78,22 +84,27 @@ export function Flipbook() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialFaqId, initialQuery]);
 
-  // Drill into a related FAQ (from a hotspot click or the side panel).
-  const drillInto = useCallback(
-    async (faqId: string, hotspotIndex?: number) => {
+  const drill = useCallback(
+    async (args: {
+      payload: GenerateRequest;
+      hotspotIndex?: number;
+      cacheKey?: string; // faqId we expect; used to dedupe navigation
+    }) => {
       if (!current || loading) return;
 
-      // Cache hit: we already expanded this branch before.
-      if (hotspotIndex !== undefined) {
-        const h = current.hotspots[hotspotIndex];
+      // Cache-hit path: if drilling by hotspotIndex and a child was already
+      // generated for that hotspot, just navigate.
+      if (args.hotspotIndex !== undefined) {
+        const h = current.hotspots[args.hotspotIndex];
         if (h?.childNodeId && nodes[h.childNodeId]) {
           navigateTo(h.childNodeId);
           return;
         }
-      } else {
-        // Side-panel click: find an existing child node pointing at this FAQ.
+      }
+      // Cache-hit path: side-panel drill — check existing children by faqId.
+      if (args.cacheKey) {
         const existing = Object.values(nodes).find(
-          (n) => n.parentId === current.id && n.faqId === faqId
+          (n) => n.parentId === current.id && n.faqId === args.cacheKey
         );
         if (existing) {
           navigateTo(existing.id);
@@ -103,21 +114,27 @@ export function Flipbook() {
 
       try {
         setLoading(true);
+        // Show a "searching FAQ via RAG" stage when we don't know the target id
+        // ahead of time (hotspot click). For known-faqId side-panel clicks,
+        // jump straight to generating.
+        setLoadingStage(args.payload.query ? "searching" : "generating");
         setError(null);
         const res = await callGenerate({
-          faqId,
+          ...args.payload,
+          contextFaqId: current.faqId,
           parentNodeId: current.id,
           styleSeed: styleSeed ?? undefined,
         });
         const childId = addNode({ parentId: current.id, response: res });
-        if (hotspotIndex !== undefined) {
-          attachChildToHotspot(current.id, hotspotIndex, childId);
+        if (args.hotspotIndex !== undefined) {
+          attachChildToHotspot(current.id, args.hotspotIndex, childId);
         }
         if (res.hotspotsError) setError(`hotspot抽出エラー: ${res.hotspotsError}`);
       } catch (err) {
         setError(err instanceof Error ? err.message : "生成に失敗しました");
       } finally {
         setLoading(false);
+        setLoadingStage("idle");
       }
     },
     [
@@ -133,22 +150,27 @@ export function Flipbook() {
     ]
   );
 
+  // Hotspot click → RAG: send the label as a free-text query, let the server
+  // retrieve + rerank against the FAQ corpus.
   const onHotspotClick = useCallback(
     (idx: number, hotspot: Hotspot) => {
-      if (!hotspot.relatedFaqId) {
-        setError(`「${hotspot.label}」に該当するFAQエントリがありません`);
-        return;
-      }
-      drillInto(hotspot.relatedFaqId, idx);
+      drill({
+        payload: { query: hotspot.label },
+        hotspotIndex: idx,
+      });
     },
-    [drillInto, setError]
+    [drill]
   );
 
+  // Side-panel click → direct FAQ lookup (user explicitly chose).
   const onRelatedClick = useCallback(
     (related: RelatedFaq) => {
-      drillInto(related.id);
+      drill({
+        payload: { faqId: related.id },
+        cacheKey: related.id,
+      });
     },
-    [drillInto]
+    [drill]
   );
 
   const onReanalyze = useCallback(async () => {
@@ -192,7 +214,6 @@ export function Flipbook() {
       </header>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-        {/* Image + hotspots */}
         <div className="relative w-full overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
           <div className="relative aspect-square w-full bg-neutral-100">
             {current ? (
@@ -210,7 +231,7 @@ export function Flipbook() {
                   disabled={loading}
                   onHotspotClick={onHotspotClick}
                 />
-                {loading && <LoadingOverlay />}
+                {loading && <LoadingOverlay stage={loadingStage} />}
               </>
             ) : loading ? (
               <SkeletonImage
@@ -218,6 +239,7 @@ export function Flipbook() {
                   initialQuery ||
                   (initialFaqId ? `FAQ: ${initialFaqId}` : "...")
                 }
+                stage={loadingStage}
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-neutral-500">
@@ -235,7 +257,7 @@ export function Flipbook() {
                 <span className="text-neutral-400">·</span>
                 <span className="text-neutral-500">
                   {current.hotspots.length} hotspots /{" "}
-                  {current.hotspots.filter((h) => h.relatedFaqId).length} FAQ連携
+                  {current.hotspots.filter((h) => h.relatedFaqId).length} FAQ候補
                 </span>
               </div>
               {current.hotspots.length === 0 && (
@@ -252,7 +274,6 @@ export function Flipbook() {
           )}
         </div>
 
-        {/* Side panel: current Q/A + related FAQs */}
         <aside className="flex flex-col gap-4">
           {current && (
             <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
@@ -273,11 +294,14 @@ export function Flipbook() {
 
           <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-              関連FAQ ({currentRelated.length})
+              関連FAQ候補 ({currentRelated.length})
+            </p>
+            <p className="mb-3 text-[11px] text-neutral-500">
+              図中の要素をクリックするとRAG検索で最適なFAQを選びます。こちらは候補の事前ヒントで、直接選んでジャンプすることもできます。
             </p>
             {currentRelated.length === 0 ? (
               <p className="text-xs text-neutral-500">
-                この図から辿れる関連FAQはまだありません。
+                この図から辿れるFAQ候補はありません。画像の要素をクリックすると検索を試みます。
               </p>
             ) : (
               <ul className="flex flex-col gap-1">
@@ -307,23 +331,40 @@ export function Flipbook() {
   );
 }
 
-function LoadingOverlay() {
+function stageText(stage: "idle" | "searching" | "generating"): string {
+  if (stage === "searching") return "FAQ検索中 (RAG)...";
+  if (stage === "generating") return "インフォグラフィック生成中...";
+  return "処理中...";
+}
+
+function LoadingOverlay({
+  stage,
+}: {
+  stage: "idle" | "searching" | "generating";
+}) {
   return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/60 backdrop-blur-sm">
+    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white/70 backdrop-blur-sm">
       <div className="animate-spin rounded-full border-4 border-neutral-300 border-t-neutral-900 p-4" />
+      <p className="text-sm font-medium text-neutral-700">{stageText(stage)}</p>
     </div>
   );
 }
 
-function SkeletonImage({ label }: { label: string }) {
+function SkeletonImage({
+  label,
+  stage,
+}: {
+  label: string;
+  stage: "idle" | "searching" | "generating";
+}) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-gradient-to-br from-neutral-100 to-neutral-200">
       <div className="h-10 w-10 animate-spin rounded-full border-4 border-neutral-300 border-t-neutral-900" />
       <p className="text-sm font-medium text-neutral-600">
-        「{label}」の図解を生成中...
+        「{label}」 — {stageText(stage)}
       </p>
       <p className="text-xs text-neutral-500">
-        FAQ検索 + 画像生成 + ホットスポット抽出に最大60秒かかります
+        RAG検索 + インフォグラフィック生成 + ホットスポット抽出に最大60秒かかります
       </p>
     </div>
   );

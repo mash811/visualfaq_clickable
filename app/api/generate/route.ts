@@ -6,7 +6,8 @@ import { buildImagePromptFromFaq } from "@/lib/prompts";
 import { saveImage } from "@/lib/imageStore";
 import { checkAndUpdateRate, checkAndIncrementDaily } from "@/lib/rateLimit";
 import { getFaqById } from "@/lib/faq/loader";
-import { searchFaq, bestFaqForLabel } from "@/lib/faq/search";
+import { bestFaqForLabel } from "@/lib/faq/search";
+import { ragSelectFaq } from "@/lib/rag";
 import type {
   GenerateRequest,
   GenerateResponse,
@@ -49,8 +50,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  // Resolve the FAQ entry: by id if given, else by top-1 search hit.
   let faq: FaqEntry | undefined;
+  let ragMethod: string | undefined;
+
   if (body.faqId) {
     faq = getFaqById(body.faqId);
     if (!faq) {
@@ -60,8 +62,11 @@ export async function POST(req: NextRequest) {
       );
     }
   } else if (body.query && body.query.trim().length > 0) {
-    const hits = searchFaq(body.query.trim(), 1);
-    if (hits.length === 0) {
+    const rag = await ragSelectFaq({
+      query: body.query.trim(),
+      contextFaqId: body.contextFaqId ?? undefined,
+    });
+    if (!rag) {
       return NextResponse.json(
         {
           error: `該当するFAQが見つかりませんでした: "${body.query.trim()}"`,
@@ -69,7 +74,8 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
-    faq = hits[0].entry;
+    faq = rag.faq;
+    ragMethod = rag.method;
   } else {
     return NextResponse.json(
       { error: "faqId or query is required" },
@@ -77,20 +83,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Parent question (if we're drilling in from another node) is used only to
-  // nudge the image style toward a zoomed-in look.
-  let parentQuestion: string | undefined;
-  if (body.parentNodeId) {
-    // parentNodeId is a client-generated UUID, not a FAQ id; the client sends
-    // parentQuestion implicitly via conversation context. We don't look up the
-    // tree server-side to keep this stateless.
-    parentQuestion = undefined;
-  }
+  const parent = body.contextFaqId
+    ? getFaqById(body.contextFaqId)
+    : undefined;
 
   const prompt = buildImagePromptFromFaq({
     question: faq.question,
     answer: faq.answer,
-    parentQuestion,
+    parentQuestion: parent?.question,
     styleSeed: body.styleSeed,
   });
 
@@ -121,17 +121,19 @@ export async function POST(req: NextRequest) {
     console.error("[generate] vlm error:", hotspotsError);
   }
 
-  // Resolve each hotspot to a FAQ entry when possible.
-  const enriched: Hotspot[] = hotspots.map((h) => {
-    const hit =
+  // Annotate each hotspot with a *hint* of a pre-resolved FAQ (via cheap Fuse
+  // match) so the UI can visually distinguish "likely has an answer" hotspots,
+  // but the actual drill-down is done by RAG at click time.
+  const annotated: Hotspot[] = hotspots.map((h) => {
+    const hint =
       bestFaqForLabel(h.label) ?? bestFaqForLabel(h.englishLabel);
-    return hit && hit.entry.id !== faq.id
-      ? { ...h, relatedFaqId: hit.entry.id }
+    return hint && hint.entry.id !== faq!.id
+      ? { ...h, relatedFaqId: hint.entry.id }
       : { ...h };
   });
 
   const related: RelatedFaq[] = dedupeRelated(
-    enriched
+    annotated
       .filter((h): h is Hotspot & { relatedFaqId: string } => !!h.relatedFaqId)
       .map((h) => {
         const e = getFaqById(h.relatedFaqId)!;
@@ -141,10 +143,11 @@ export async function POST(req: NextRequest) {
 
   const elapsed = Date.now() - startedAt;
   console.log(
-    `[generate] faq=${faq.id} provider=${image.provider} ` +
-      `cost~$${image.costUsd.toFixed(3)} elapsed=${elapsed}ms ` +
-      `hotspots=${enriched.length} resolved=${related.length} ` +
-      `dailyCount=${daily.count}/${daily.limit}`
+    `[generate] faq=${faq.id}${
+      ragMethod ? ` rag=${ragMethod}` : ""
+    } provider=${image.provider} cost~$${image.costUsd.toFixed(3)} ` +
+      `elapsed=${elapsed}ms hotspots=${annotated.length} ` +
+      `hinted=${related.length} dailyCount=${daily.count}/${daily.limit}`
   );
 
   const response: GenerateResponse = {
@@ -154,7 +157,7 @@ export async function POST(req: NextRequest) {
     answer: faq.answer,
     imageId,
     imageUrl,
-    hotspots: enriched,
+    hotspots: annotated,
     related,
     hotspotsError,
   };

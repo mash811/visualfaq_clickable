@@ -30,9 +30,15 @@ export type FlipNode = {
 };
 
 export type GenerateRequest = {
-  // Either faqId (direct lookup) or query (free-text search → top1 FAQ).
+  // Direct-lookup mode (no RAG): just render the FAQ with this id.
   faqId?: string;
+  // RAG mode: free-text query. Used when a hotspot is clicked — the server
+  // runs retrieval (Fuse) + rerank (Claude) over the FAQ corpus to pick the
+  // target entry.
   query?: string;
+  // When drilling from a parent FAQ, pass its id so RAG can use it as context
+  // and the image prompt knows to do a zoomed-in detail view.
+  contextFaqId?: string | null;
   parentNodeId?: string | null;
   styleSeed?: string;
 };
