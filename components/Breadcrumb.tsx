@@ -7,6 +7,15 @@ type Props = {
   onNavigate: (nodeId: string) => void;
 };
 
+function shortLabel(question: string): string {
+  // Trim trailing " ですか？" / "?" etc. so breadcrumbs stay compact.
+  return question
+    .replace(/\s*[?？]$/u, "")
+    .replace(/とは(何ですか|なんですか|どう(いう|なる)ものですか)$/u, "")
+    .trim()
+    .slice(0, 24);
+}
+
 export function Breadcrumb({ pathNodes, onNavigate }: Props) {
   if (pathNodes.length === 0) return null;
   return (
@@ -16,6 +25,7 @@ export function Breadcrumb({ pathNodes, onNavigate }: Props) {
     >
       {pathNodes.map((node, idx) => {
         const isLast = idx === pathNodes.length - 1;
+        const label = shortLabel(node.question);
         return (
           <span key={node.id} className="flex items-center gap-1">
             <button
@@ -27,9 +37,9 @@ export function Breadcrumb({ pathNodes, onNavigate }: Props) {
                   ? "rounded px-1.5 py-0.5 font-semibold text-neutral-900"
                   : "rounded px-1.5 py-0.5 hover:bg-neutral-200"
               }
-              title={node.label}
+              title={node.question}
             >
-              {node.label}
+              {label}
             </button>
             {!isLast && <span className="text-neutral-400">/</span>}
           </span>

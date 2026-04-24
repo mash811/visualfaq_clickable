@@ -1,6 +1,13 @@
 "use client";
 
-import type { GenerateRequest, GenerateResponse, Hotspot } from "./types";
+import type {
+  GenerateRequest,
+  GenerateResponse,
+  Hotspot,
+  RelatedFaq,
+} from "./types";
+
+export type FaqSuggestion = { id: string; question: string; score?: number };
 
 export async function callGenerate(
   body: GenerateRequest
@@ -18,9 +25,9 @@ export async function callGenerate(
 }
 
 export async function callReanalyze(args: {
-  topic: string;
+  faqId: string;
   imageId: string;
-}): Promise<Hotspot[]> {
+}): Promise<{ hotspots: Hotspot[]; related: RelatedFaq[] }> {
   const res = await fetch("/api/reanalyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -30,6 +37,24 @@ export async function callReanalyze(args: {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(data.error ?? `reanalyze failed (${res.status})`);
   }
-  const data = (await res.json()) as { hotspots: Hotspot[] };
-  return data.hotspots;
+  return (await res.json()) as { hotspots: Hotspot[]; related: RelatedFaq[] };
+}
+
+export async function searchFaqApi(
+  query: string,
+  limit = 8
+): Promise<FaqSuggestion[]> {
+  const res = await fetch(
+    `/api/faq/search?q=${encodeURIComponent(query)}&limit=${limit}`
+  );
+  if (!res.ok) return [];
+  const data = (await res.json()) as { results: FaqSuggestion[] };
+  return data.results;
+}
+
+export async function listAllFaqs(): Promise<FaqSuggestion[]> {
+  const res = await fetch(`/api/faq/list`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { entries: FaqSuggestion[] };
+  return data.entries;
 }
